@@ -1,0 +1,175 @@
+﻿'16-06-23 Dan Barkers drawing Exporter.
+'------------------Descritpion------------------------------------
+'This rule is used for exporting a drawing as a PDF.
+'When rule Is run, the following things are done:
+'-Checks that file is a drawing. Will not run on part or assy.
+'-Checks for custom iprop 'Rev Number', if it exists then checks it matches 'Revsion' number. If not then alert user. If no custom iprop 'Rev Number' then it continues.
+'-Check if ECO No.has been added. If no then alert user.
+'-Exports drawing as PDF with suffix '_revNo'.
+
+'---------------------Change Record--------------------------
+'02-11-23 - Message box to notify of export compeltion moved to AFTER the export.
+'02-11-23 - Progress bar added.
+'08-11-23 - Progress bar closes on errors.
+'15-11-23 - Folder picker defaults to the D drive rather than directory of drg. Allows user to start from the top of the structure rather than have folder tree already opened.
+'05-09-24 - Robustness and error handling improvments.
+
+'----------------------Development---------------------------
+'To Do:
+'Check that the file is saved before export. rare occurance with large drawings that inventor crashes whilst exporting.
+'Add a timer for export time. Alert user when export is complete and how long it took
+'Folder picker prompt to default to the root, or better just default to it without asking user?
+'On each run, export to a txt file to keep log of usage etc
+'On export, check if file with that name already exists in directory. Ask user if they want to overwrite.
+
+Dim oProgressBar As Inventor.ProgressBar
+oProgressSteps = 6		'Progress bar will 'step through'
+oProgressStep = 0		'Start at 0.
+oProgressBar = ThisApplication.CreateProgressBar(False, oProgressSteps, "Drawing Export")'Big Progress Bar, use True for small
+oProgressBar.Message = ("Exporting Drawing. Step " & oProgressStep & " of " & oProgressSteps _
+& vbLf & "Starting Drawing Export")
+oProgressBar.UpdateProgress
+
+'----------------------------------------1. VALIDATE FILE TYPE-------------------------------------------
+'First, confirm that the active file is a drawing. If not then exporter wont run.
+
+''Step' the progress bar forward and update message
+oProgressStep += 1
+oProgressBar.Message = ("Exporting Drawing. Step " & oProgressStep & " of " & oProgressSteps _
+& vbLf & "Checking document type")
+oProgressBar.UpdateProgress
+
+'Check doc type. Exit sub IF NOT a drawing
+If ThisDoc.Document.DocumentType <> kDrawingDocumentObject Then
+	MessageBox.Show("Active document must be a drawing to run this rule.", "Error")
+	oProgressBar.Close
+	Exit Sub
+End If
+
+'----------------------------------------2. VALIDATE Rev No-------------------------------------------
+'For some reason, our inventor has two rev numbers, so lets check if they both exist and that they match.
+'Alert user of error if mismatch rev numbers.
+'For systems with no custom iproperty for 'Rev Number' this check is skipped.
+
+'Step' the progress bar forward and update message
+oProgressStep += 1
+oProgressBar.Message = ("Exporting Drawing. Step " & oProgressStep & " of " & oProgressSteps _
+& vbLf & "Validating Revision Number")
+oProgressBar.UpdateProgress
+
+RevisionNumber = iProperties.Value("Project", "Revision Number")	'get property from the project tab
+
+'Try to see if the custom iproperties exist
+Try
+	'Were looking for the 'Rev Number' custom iproperty
+	RevNumber = iProperties.Value("Custom", "Rev Number")	'If it exists, then get property from the custom tab
+	
+	'Now we have two rev numbers, check if there is a missmatch and Warn user if yes
+	If RevNumber <> RevisionNumber Then
+		
+		'concatonate a load of stuff to show in the msg box
+		RevErrMsg = "iProperties Revision Numbers do not Match." _		'Line 1
+		& vbLf & "Rev Number: " + RevNumber _		'Line 2
+		& vbLf & "Revision number: " + RevisionNumber		'Line 3
+		
+		RevErr = MessageBox.Show(RevErrMsg, "Rev Number Error", MessageBoxButtons.OKCancel, MessageBoxIcon.Exclamation)'Display error in message box
+		
+		If RevErr = vbOK Then
+			'No action, proceed without and ECO Number
+			'MessageBox.Show("Proceed without ECO No.")
+		Else If RevErr = vbCancel Then
+			'Cancel export and close progress bar
+			oProgressBar.Close
+			Exit Sub	'Exit if cancelled
+		End If
+	End If
+		
+Catch
+	'Assume error means custom iproperty not found. No comparison required. Continue.
+	'MessageBox.Show("No iprop found")
+End Try
+
+
+'----------------------------------------3. VALIDATE ECO No.-------------------------------------------
+'Check if ECO NO. has been set. Typically it is needed when exproting a drg for check. 
+'ECO Number is a custom iproperty. If it doesnt exist then this is ignored.
+
+'Step' the progress bar forward and update message
+oProgressStep += 1
+oProgressBar.Message = ("Exporting Drawing. Step " & oProgressStep & " of " & oProgressSteps _
+& vbLf & "Validating ECO Number")
+oProgressBar.UpdateProgress
+
+'Try to see if the custom iproperties exist
+Try
+	'Were looking for the 'ECO Number' custom iproperty.
+	ecoNumber = iProperties.Value("Custom", "ECO Number")	'get property from the custom tab
+	
+	'Custom iprop found then check if it has been set or left blank
+	If ecoNumber = "" Then
+		ecoQuestion = MessageBox.Show("ECO Number has not been set.", "ECO Number Error", MessageBoxButtons.OKCancel, MessageBoxIcon.Exclamation, MessageBoxDefaultButton.Button1)
+		
+		If ecoQuestion = vbOK Then
+			'No action, proceed without and ECO Number
+			'MessageBox.Show("Proceed without ECO No.")
+		Else If ecoQuestion = vbCancel Then
+			'Cancel export and close progress bar
+			oProgressBar.Close
+			Exit Sub	'Exit if cancelled
+		End If
+	End If
+	
+Catch
+	'Assume error means custom iproperty not found. No check required. Continue.
+	'MessageBox.Show("No iprop found")
+End Try	
+
+'----------------------------------------4. SELECT EXPORT LOCATION-------------------------------------------
+'After all checks, prompt user to select export location.
+
+'Step' the progress bar forward and update message
+oProgressStep += 1
+oProgressBar.Message = ("Exporting Drawing. Step " & oProgressStep & " of " & oProgressSteps _
+& vbLf & "Select Export Directory")
+oProgressBar.UpdateProgress
+
+Dim ExportPath As String = ThisDoc.Path	'get current file path
+Dim fldrPicker = New FolderBrowserDialog()	'define folder picker dialog box
+
+'Set folder picker dialog box options
+fldrPicker.SelectedPath = "D:\" 'ExportPath		'The default path when box opens
+fldrPicker.ShowNewFolderButton = False		'Show or Hide new folder button
+fldrPicker.Description = "Select Export Location"
+
+'Show the dialog box to select export location
+If DialogResult.OK = fldrPicker.ShowDialog() Then
+	'Capture the selection
+	ExportPath = fldrPicker.SelectedPath & "\" & ThisDoc.FileName(False) & "_" & RevisionNumber & ".pdf"
+
+'----------------------------------------5. BEGIN EXPORT-------------------------------------------
+'Export can begin.
+
+'Update prog bar to show export location
+oProgressStep += 1
+oProgressBar.Message = ("Exporting Drawing. Step " & oProgressStep & " of " & oProgressSteps _
+& vbLf & "Exporting to: " & ExportPath)
+oProgressBar.UpdateProgress
+
+ThisDoc.Document.SaveAs(ExportPath , True)	'Export to selected location with file name & rev no.
+
+'----------------------------------------6. EXPORT COMPLETE-------------------------------------------
+'Alert user that the export is complete. Display the export location and file name in a msg box.
+
+'Step' the progress bar forward and update message
+oProgressStep += 1
+oProgressBar.Message = ("Exporting Drawing. Step " & oProgressStep & " of " & oProgressSteps _
+& vbLf & "Drawing Export Complete")
+oProgressBar.UpdateProgress
+
+'Msg box to let user know export is complete
+MessageBox.Show(ExportPath, "Exported to:")
+
+'Close progress bar when complete
+oProgressBar.Close
+
+end if 
